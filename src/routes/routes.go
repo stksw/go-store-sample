@@ -9,6 +9,10 @@ import (
 
 func Setup(app *fiber.App) {
 	api := app.Group("api")
+
+	api.Get("products", controllers.ProductsFrontend)
+	api.Get("search_products", controllers.SearchProducts)
+
 	
 	// seller api
 	seller := api.Group("seller")
