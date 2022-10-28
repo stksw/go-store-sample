@@ -4,7 +4,6 @@ import (
 	"ambassador/src/database"
 	"ambassador/src/middlewares"
 	"ambassador/src/models"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,7 +28,7 @@ func Register(c *fiber.Ctx) error {
 		FirstName:    data["first_name"],
 		LastName:     data["last_name"],
 		Email:        data["email"],
-		IsSeller: strings.Contains(c.Path(), "/api/sellers"),
+		IsSeller: 		strings.Contains(c.Path(), "/api/seller"),
 	}
 
 	user.SetPassword(data["password"])
@@ -62,12 +61,12 @@ func Login(c *fiber.Ctx) error {
 		})
 	}
 
-	payload := jwt.StandardClaims{
-		Subject: strconv.Itoa(int(user.Id)),
-		ExpiresAt: time.Now().Add(time.Hour * 24).Unix(),
-	}
+	isSeller := strings.Contains(c.Path(), "/api/seller")
 
-	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, payload).SignedString([]byte("secret"))
+	// ルックアップテーブル
+	scope := map[bool]string{true:"seller", false:"admin"}[isSeller]
+
+	token, err := middlewares.GenerateJWT(user.Id, scope)
 	if err != nil {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(fiber.Map{
@@ -81,7 +80,6 @@ func Login(c *fiber.Ctx) error {
 		Expires: time.Now().Add(time.Hour * 24),
 		HTTPOnly: true,
 	}
-
 	c.Cookie(&cookie)
 
 	return c.JSON(fiber.Map{
@@ -99,6 +97,11 @@ func Profile(c *fiber.Ctx) error {
 	id, _ := middlewares.GetUserId(c)
 	database.DB.Where("id = ?", id).First(&user)
 
+	if strings.Contains(c.Path(), "/api/seller") {
+		seller := models.Seller(user)
+		seller.CalculateRevenue(database.DB)
+		return c.JSON(seller)
+	}
 	return c.JSON(user)
 }
 
