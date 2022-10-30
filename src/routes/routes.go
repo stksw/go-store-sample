@@ -24,6 +24,9 @@ func Setup(app *fiber.App) {
 	sellerAuthenticated.Get("profile", controllers.Profile)
 	sellerAuthenticated.Put("users/info", controllers.UpdateInfo)
 	sellerAuthenticated.Put("users/password", controllers.UpdatePassword)
+	sellerAuthenticated.Post("links", controllers.CreateLink)
+	sellerAuthenticated.Get("stats", controllers.Stats)
+	sellerAuthenticated.Get("rankings", controllers.Rankings)
 
 	// admin api
 	admin := api.Group("admin")

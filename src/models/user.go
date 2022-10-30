@@ -25,6 +25,10 @@ func (user *User) ComparePassword(password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
 }
 
+func (user *User) Name() string {
+	return user.FirstName + " " + user.LastName
+}
+
 type Seller User
 
 func (seller *Seller) CalculateRevenue(db *gorm.DB) {
@@ -62,3 +66,4 @@ func (admin *Admin) CalculateRevenue(db *gorm.DB) {
 	}
 	admin.Revenue = &revenue
 }
+
