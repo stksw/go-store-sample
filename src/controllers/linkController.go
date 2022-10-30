@@ -78,6 +78,15 @@ func Stats(c *fiber.Ctx) error {
 			"revenue": revenue,
 		})
 	}
-
 	return c.JSON(result)
+}
+
+func GetLink(c *fiber.Ctx) error {
+	var link models.Link
+	code := c.Params("code")
+
+	database.DB.Preload("User").Preload("Products").First(&link, &models.Link{
+		Code: code,
+	})
+	return c.JSON(link)
 }

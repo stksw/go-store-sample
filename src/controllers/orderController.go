@@ -5,6 +5,8 @@ import (
 	"ambassador/src/models"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/stripe/stripe-go/v72"
+	"github.com/stripe/stripe-go/v72/checkout/session"
 )
 
 func Orders(c *fiber.Ctx) error {
@@ -32,17 +34,17 @@ type CreateOrderRequest struct {
 }
 
 func CreateOrder(c *fiber.Ctx) error {
+	var link models.Link
 	var request CreateOrderRequest
+	var lineItems []*stripe.CheckoutSessionLineItemParams
 
 	if err := c.BodyParser(&request); err != nil {
 		return err
 	}
 
-	link := models.Link{
+	database.DB.Preload("User").First(&link, &models.Link{
 		Code: request.Code,
-	}
-	database.DB.Preload("User").First(&link)
-
+	})
 	if link.Id == 0 {
 		c.Status(fiber.StatusBadRequest)
 		return c.JSON(fiber.Map{
@@ -50,19 +52,120 @@ func CreateOrder(c *fiber.Ctx) error {
 		})
 	}
 
-	// order := models.Order{
-	// 	Code:            link.Code,
-	// 	UserId:          link.UserId,
-	// 	AmbassadorEmail: link.User.Email,
-	// 	FirstName:       request.FirstName,
-	// 	LastName:        request.LastName,
-	// 	Email:           request.Email,
-	// 	Address:         request.Address,
-	// 	Country:         request.Country,
-	// 	City:            request.City,
-	// 	Zip:             request.Zip,
-	// }
+	order := models.Order{
+		Code:            link.Code,
+		UserId:          link.UserId,
+		AmbassadorEmail: link.User.Email,
+		FirstName:       request.FirstName,
+		LastName:        request.LastName,
+		Email:           request.Email,
+		Address:         request.Address,
+		Country:         request.Country,
+		City:            request.City,
+		Zip:             request.Zip,
+	}
 
-	return c.JSON(link)
+	tx := database.DB.Begin()
+	if err := tx.Create(&order).Error; err != nil {
+		tx.Rollback()
+		c.Status(fiber.StatusBadRequest)
+		return c.JSON(fiber.Map{
+			"message": err.Error(),
+		})
+	}
 
+	for _, requestProduct := range request.Products{
+		product := models.Product{}
+		product.Id = uint(requestProduct["product_id"])
+		database.DB.First(&product)
+		
+		amount := product.Price * float64(requestProduct["quantity"])
+		item := models.OrderItem{
+			OrderId: 					 order.Id,
+			ProductTitle: 		 product.Title,
+			Price: 						 product.Price,
+			Quantity: 				 uint(requestProduct["quantity"]),
+			AmbassadorRevenue: 0.1 * amount,
+			AdminRevenue: 		 0.9 * amount,
+		}
+
+		if err := tx.Create(&item).Error; err != nil {
+			tx.Rollback()
+			c.Status(fiber.StatusBadRequest)
+			return c.JSON(fiber.Map{
+				"message": err.Error(),
+			})
+		}
+
+		lineItems = append(lineItems, &stripe.CheckoutSessionLineItemParams{
+			Name: 			 stripe.String(product.Title),
+			Description: stripe.String(product.Description),
+			Amount: 		 stripe.Int64(100 * int64(product.Price)),
+			Currency: 	 stripe.String("usd"),
+			Quantity: 	 stripe.Int64(int64(requestProduct["quantity"])),
+		})
+	}
+	stripe.Key = "sk_test_51IFZyEHTzDkheYRXGbcsuxNHWnNyS6StNwDvsDvcGElhqvACAAXSZgoQrxVUFn8uqZKprhPc8UtpUOdsj8tkAxiH00oGvO6le7"
+	params := stripe.CheckoutSessionParams{
+		SuccessURL: stripe.String("http://localhost:5000/success?source={CHECKOUT_SESSION_ID}"),
+		CancelURL: stripe.String("http://localhost:5000/error"),
+		PaymentMethodTypes: stripe.StringSlice([]string{"card"}),
+		LineItems: lineItems,
+	}
+
+	source, err := session.New(&params)
+	if err != nil {
+		tx.Rollback()
+		c.Status(fiber.StatusBadRequest)
+		return c.JSON(fiber.Map{
+			"message": err.Error(),
+		})
+	}
+	
+	tx.Commit()
+	return c.JSON(source)
+}
+
+func CompleteOrder(c *fiber.Ctx) error {
+	var data map[string]string 
+	
+	if err := c.BodyParser(&data); err != nil {
+		return err
+	}
+
+	order := model.Order{}
+
+	database.DB.Preload("orderItems").First(&order, models.Order{
+		TransactionId: data["source"],
+	})
+
+	if order.Id == 0 {
+		c.Status(fiber.StatusNotFound)
+		return c.JSON(fiber.Map{
+			"message": "Order not found",
+		})
+	}
+
+	order.Complete = true
+	database.DB.Save(&order)
+
+	go func(order models.Order) {
+		ambassadorRevenue := 0.0
+		adminRevenue := 0.0
+
+		for _, item := range order.OrderItem {
+			ambassadorRevenue += item.AmbassadorRevenue
+			adminRevenue += item.AdminRevenue
+		}
+
+		user := models.User{}
+		user.Id = order.UserId
+		database.DB.Find(&user)
+
+		database.Cache.ZIncrBy(context.Background(), "rankings", ambassadorRevenue, user.Name())
+	}(order)
+
+	return c.JSON(fiber.Map{
+		"message": "success",
+	})
 }
