@@ -3,6 +3,9 @@ package controllers
 import (
 	"ambassador/src/database"
 	"ambassador/src/models"
+	"context"
+	"net/smtp"
+	"fmt"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/stripe/stripe-go/v72"
@@ -133,7 +136,7 @@ func CompleteOrder(c *fiber.Ctx) error {
 		return err
 	}
 
-	order := model.Order{}
+	order := models.Order{}
 
 	database.DB.Preload("orderItems").First(&order, models.Order{
 		TransactionId: data["source"],
@@ -153,7 +156,7 @@ func CompleteOrder(c *fiber.Ctx) error {
 		ambassadorRevenue := 0.0
 		adminRevenue := 0.0
 
-		for _, item := range order.OrderItem {
+		for _, item := range order.OrderItems {
 			ambassadorRevenue += item.AmbassadorRevenue
 			adminRevenue += item.AdminRevenue
 		}
@@ -163,6 +166,12 @@ func CompleteOrder(c *fiber.Ctx) error {
 		database.DB.Find(&user)
 
 		database.Cache.ZIncrBy(context.Background(), "rankings", ambassadorRevenue, user.Name())
+		ambassadorMessage := []byte(fmt.Sprintf("You earned $%f from the link #%s", ambassadorRevenue, order.Code))
+		smtp.SendMail("mailhog:1025", nil, "no-reply@email.com", []string{order.AmbassadorEmail}, ambassadorMessage)
+
+		adminMessage := []byte(fmt.Sprintf("Order #%d with a total of $%f has been completed", order.Id, adminRevenue))
+		smtp.SendMail("mailhog:1025", nil, "no-reply@email.com", []string{"admin@example.com"}, adminMessage)
+
 	}(order)
 
 	return c.JSON(fiber.Map{
